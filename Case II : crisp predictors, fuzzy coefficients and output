@@ -1,12 +1,21 @@
 
-## Import dataset ##
-#-------------------------------------------------------------------------------#
-Immunotherapy <- read.csv("Immunotherapy.csv", header = TRUE)
-nrow(Immunotherapy) #sample size is 90
-ncol(Immunotherapy) #there are 7 variables and 1 response variable called 'Result_of_Treatment'
-table(Immunotherapy$Result_of_Treatment) #imbalanced towards 1s (79%)
-str(Immunotherapy)
-#-------------------------------------------------------------------------------#
+#'''''''''''''Comment: Edit these lines to import a different dataset'''''''''''''''''''''''''''''''
+# ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+## Import dataset ##                                                                             #''
+#-------------------------------------------------------------------------------#                #''
+Immunotherapy <- read.csv("Immunotherapy.csv", header = TRUE)                                    #''
+nrow(Immunotherapy) #sample size is 90                                                           #''
+ncol(Immunotherapy) #there are 7 variables and 1 response variable called 'Result_of_Treatment'  #''
+table(Immunotherapy$Result_of_Treatment) #imbalanced towards 1s (79%)                            #''
+str(Immunotherapy)                                                                               #''
+#-------------------------------------------------------------------------------#                #''
+# ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+
+
+
+#''''''Comment: Change or add values in lines 25-42 to attempt different scenarios.''''''''''''''''''''''
+#'''''''''''''' Once you set these, it will export a CSV which is later imported for implementation.'''''
 
 
 ## Set Model Implementation Settings##
@@ -412,6 +421,8 @@ fuzzify_Y <- function(Y, m, l=1, r=1){
 
 
 
+
+
 ## --- MODEL START --- ##
 #-----------------------#
 # startTime = proc.time()
@@ -455,15 +466,24 @@ for ( simControl in 1:nrow(model_settings)){
   pred_b6_upr <- model_settings$bi_upper[simControl]
   pred_b7_lwr <- model_settings$bi_lower[simControl]
   pred_b7_upr <- model_settings$bi_upper[simControl]
+      #''''''Comment: Add more pred_bi_lwr and pred_bu_upr values here, depending on the number of predictors''''''''
+
+  
+  
   
   ## Model settings ##
   #------------------#
   bi_lower <- c(pred_b1_lwr, pred_b2_lwr, pred_b3_lwr, pred_b4_lwr, pred_b5_lwr, pred_b6_lwr, pred_b7_upr)
   bi_upper <- c(pred_b1_upr, pred_b2_upr, pred_b3_upr, pred_b4_upr, pred_b5_upr, pred_b6_upr, pred_b7_upr)
+        #''''''Comment: adjust lines 476-477 depending on number of predictors''''''''
+  
   b0_lwr <- pred_b0_lwr
   b0_upper <- pred_b0_upr
+  
   Xmtx <- cbind(Immunotherapy$age, Immunotherapy$Time, Immunotherapy$Number_of_Warts, Immunotherapy$Type,
                 Immunotherapy$Area, Immunotherapy$induration_diameter, Immunotherapy$sex)
+      #''''''Comment: adjust lines 483-484 depending on number of predictors''''''''       
+  
   Iterations <- iterations
   Fuzzification_factor <- fuzzy_factor
   left_point_symmetry <- left_symmetry
@@ -584,7 +604,8 @@ for ( simControl in 1:nrow(model_settings)){
   rownames(Model_predicted_betais) <- c("b1:MSE", "b1:MAE", "b1:RMSE", "b2:MSE", "b2:MAE", "b2:RMSE", 
                                         "b3:MSE", "b3:MAE", "b3:RMSE", "b4:MSE", "b4:MAE", "b4:RMSE",
                                         "b5:MSE", "b5:MAE", "b5:RMSE", "b6:MSE", "b6:MAE", "b6:RMSE",
-                                        "b7:MSE", "b7:MAE", "b7:RMSE")
+                                        "b7:MSE", "b7:MAE", "b7:RMSE")   #''''''Comment: add more betas here if you have more predictors''''''''
+                                        
   predicted_betas <- rbind(Model_predicted_beta0s,Model_predicted_betais)
   colnames(predicted_betas) <- c("TFN a", "TFN b", "TFN c")
   
