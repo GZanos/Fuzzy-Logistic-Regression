@@ -1,0 +1,920 @@
+## Comments:
+   # * Adjust line 11 to import your data. Then define your binary response variable on line 14.
+   # * Default model parameter settings on lines 19-32. Adjust these accordingly, if you need to.
+   # * Then, run the code top-to-bottom and this will produce Case II, III and IV results in CSV format.
+   # * The below is based off the Immunotherapy dataset example: https://archive.ics.uci.edu/ml/datasets/Immunotherapy+Dataset
+
+
+## Code Parameter Settings ##
+#-------------------------------------------------------------------------------#
+
+# Import data from CSV
+Df <- read.csv("Immunotherapy.csv", header = TRUE)
+
+# Which is your response variable ?
+response_var <- "Result_of_Treatment"
+
+#### Model Settings Input ####
+
+#------Parameter--------------------#|------Description----------------------------------#
+b0.lower <- -1                      #| sets lower limit for beta(0) Monte Carlo method
+b0.upper <- 1                       #| sets upper limit for beta(0) Monte Carlo method
+bi.lower <- -1                      #| sets lower limit for beta(i) Monte Carlo method
+bi.upper <- 1                       #| sets upper limit for beta(i) Monte Carlo method
+Iterations <- 10000                 #| sets number of replications in Monte Carlo method
+Fuzzification.factor <- 1           #| sets factor by which data is fuzzified
+fuzzy_y0_min <- 0                   #| sets min limit for y=0 binary fuzzification
+fuzzy_y0_max <- 1                   #| sets max limit for y=0 binary fuzzification
+fuzzy_y1_min <- 0                   #| sets min limit for y=1 binary fuzzification
+fuzzy_y1_max <- 1                   #| sets max limit for y=1 binary fuzzification
+left.point.asymmetry <- 1           #| sets asymmetry on TFNs for left-side
+right.point.asymmetry <- 1          #| sets asymmetry on TFNs for right-side
+Fuzzy.threshold <- c(0.4, 0.5, 0.6) #| sets fuzzy threshold for task classification
+fuzzy.factor.pred <- 0.2            #| sets factor of fuzzification for predictors
+#----------------------------------------------------------------------------------------#
+
+
+# Check and install required packages if necessary
+required_packages <- c("FuzzyR", "openxlsx", "FuzzyNumbers", "Rfast")
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+# Load the required packages
+library(FuzzyR)
+library(openxlsx)
+library(FuzzyNumbers)
+library(Rfast)
+
+                                  
+                                  
+                                  ############################
+                                  #### Required Functions ####
+                                  ############################
+
+## Operations ##
+#------------------------------------------------------------------------#
+
+# Addition Function
+add_TFN <- function(TFN1, TFN2) {
+  TFN3 <- c((TFN1[1]+TFN2[1]) , (TFN1[2]+TFN2[2]) , (TFN1[3]+TFN2[3]))
+  TFN3
+}
+
+# Subtraction Function
+sub_TFN <- function(TFN1, TFN2) {
+  TFN3 <- c((TFN1[1]-TFN2[3]) , (TFN1[2]-TFN2[2]) , (TFN1[3]-TFN2[1]))
+  TFN3
+}
+
+# Multiplication Function
+mult_TFN <- function(TFN1, TFN2) {
+  TFN3 <- array(NA,3)
+  TFN3[1] <- min(TFN1[1]*TFN2[1] , TFN1[1]*TFN2[3] , TFN1[3]*TFN2[1] , TFN1[3]*TFN2[3])
+  TFN3[2] <- TFN1[2]*TFN2[2]
+  TFN3[3] <- max(TFN1[1]*TFN2[1] , TFN1[1]*TFN2[3] , TFN1[3]*TFN2[1] , TFN1[3]*TFN2[3])
+  TFN3
+}
+
+# Division Function
+div_TFN <- function(TFN1, TFN2) {
+  TFN3 <- array(NA,3)
+  TFN3[1] <- min(TFN1[1]/TFN2[1] , TFN1[1]/TFN2[3] , TFN1[3]/TFN2[1] , TFN1[3]/TFN2[3])
+  TFN3[2] <- TFN1[2]/TFN2[2]
+  TFN3[3] <- max(TFN1[1]/TFN2[1] , TFN1[1]/TFN2[3] , TFN1[3]/TFN2[1] , TFN1[3]/TFN2[3])
+  TFN3
+}
+#------------------------------------------------------------------------#
+
+
+
+
+## TFN Functions ##
+#------------------------------------------------------------------------#
+
+# Membership Function using FuzzyR
+fn_member_grades <- function(TFN, MTX, x){
+  w <- MTX[TFN,]
+  mf <- genmf('trimf', w)
+  print("The a-cut evaluation of x elemnents is:")
+  e <- evalmf(x, mf)
+  e <- cbind(e, x)
+  return(list(TFN_Selected = w, MF_Evaluation = e))
+}
+
+
+# Alpha-cut interval using FuzzyR
+a_cut_mf <- function(TFN, alpha, x) {
+  w <- TFN
+  mf <- genmf('trimf', w)
+  e <- evalmf(x, mf)
+  edf <- data.frame(e, x)
+  edf <- subset(edf, e>=a)
+  edf
+}
+
+
+# Definition 2.4 - method a
+abs_tfn_1 <- function(TFN){
+  abs_w <- array(NA,3)
+  w <- TFN
+  abs_w[1] <- max(min(w) , -max(w) , 0)
+  abs_w[2] <- if (w[2]>=0) {
+    w[2]
+  } else if (w[2]<0) {
+    abs(w[2])
+  } 
+  abs_w[3] <- max(-min(w) , max(w)) 
+  abs_w
+}
+
+
+# Definition 2.4 - method b
+abs_tfn_2 <- function(TFN){
+  abs_w <- array(NA,3)
+  w <- TFN
+  abs_w[1] <- max(min(w) , -max(w) , 0) 
+  abs_w[3] <- max(-min(w) , max(w))
+  distw <- (w[2]-w[1])/(w[3]-w[1])
+  distabsw <- abs_w[3]-abs_w[1]
+  abs_w[2] <- abs_w[1]+(distw*distabsw)
+  abs_w
+}
+
+
+# Definition 2.5
+random_crisps <- function(n, min, max) {
+  round(runif(n = n, min=min, max=max), 3)
+}
+
+
+# Definition 2.6
+random_TFNs <- function(min, max, n=3) {
+  round(sort(runif(n = n, min=min, max=max)),3)
+}
+
+Random_TFNs_norm <- function(mean, sd, n=3) {
+  round(sort(rnorm(n = n, mean=mean, sd=sd)),3)
+}
+#------------------------------------------------------------------------#
+
+
+
+## Variable Fuzzification ##
+#------------------------------------------------------------------------#
+fuzzify_Y <- function(Y, m, l=1, r=1){ 
+  center_point <- ifelse(Y == 0, 0, 1) 
+  set.seed(123) 
+  left_point <- array(NA, length(center_point))
+  right_point <- array(NA, length(center_point))
+  left_point[which(center_point == 0)] <- 0 - l * m * runif(length(which(center_point == 0)), min = fuzzy_y0_min, max = fuzzy_y0_max) 
+  right_point[which(center_point == 0)]  <- 0 + r * m * runif(length(which(center_point == 0)), min = fuzzy_y0_min, max = fuzzy_y0_max)
+  
+  left_point[which(center_point == 1)] <- 1 - l * m * runif(length(which(center_point == 1)), min = fuzzy_y1_min, max = fuzzy_y1_max) 
+  right_point[which(center_point == 1)]  <- 1 + r * m * runif(length(which(center_point == 1)), min = fuzzy_y1_min, max = fuzzy_y1_max)
+  
+  
+  TFN_Y_df <- data.frame(left_point, center_point, right_point) 
+  TFN_Y <- as.matrix(TFN_Y_df) 
+  return(TFN_Y)
+}
+
+fuzzify_triangular <- function(X, w) {
+  U <- range(X) # Define the universe of discourse
+  fuzzy_X <- matrix(NA, nrow = length(X), ncol = 3)
+  for (j in seq_along(X)) { # Fuzzify the vector
+    fuzzy_X[j,] <- c(X[j] - w, X[j], X[j] + w)
+  }
+  return(fuzzy_X)
+}
+
+
+
+## Fuzzy Optimization Measures ##
+#------------------------------------------------------------------------#
+
+# Calculate MSE
+MSE_calc <- function(actual,predicted) {
+  if (nrow(actual) != nrow(predicted)){
+    stop("Unequal number of numbers in actual and predicted!")
+  }
+  n <- nrow(actual)
+  total <- 0
+  for(i in 1:n){
+    total <- total + sum((actual[i,]-predicted[i,])^2)
+  }
+  MSE_fuzzy = total / n
+  return(MSE_fuzzy = MSE_fuzzy)
+}
+
+
+# Root Mean Squared Error
+RMSE <- function(actual, predicted) {
+  n_rows <- nrow(predicted)
+  rmse <- numeric(n_rows)
+  for (i in 1:n_rows) {
+    rmse[i] <- sqrt(mean((predicted[i,] - actual[i,])^2))
+  }
+  avg_rmse <- mean(rmse)
+  return(avg_rmse)
+}
+
+
+# MAE
+MAE_calc <- function(actual,predicted) {
+  if (nrow(actual) != nrow(predicted)){
+    stop("Unequal number of numbers in actual and predicted!")
+  }
+  n <- nrow(actual)
+  total <- 0
+  for(i in 1:n){
+    total <- total + sum(abs(actual[i,]-predicted[i,]))
+    MAE_fuzzy <- total / n
+  }
+  return(MAE_fuzzy = MAE_fuzzy)
+}
+#------------------------------------------------------------------------#
+
+
+
+
+## Performance Measures ##
+#------------------------------------------------------------------------#
+
+# Specificity
+specificity <- function(actuals, predictions) {
+  # Define the threshold for classification
+  threshold <- 0.5
+  # Convert the matrices to vectors
+  actuals_vec <- as.vector(actuals)
+  predictions_vec <- as.vector(predictions)
+  # Determine the true negatives and false positives
+  tn <- sum(actuals_vec < threshold & predictions_vec < threshold)
+  fp <- sum(actuals_vec < threshold & predictions_vec >= threshold)
+  # Calculate specificity
+  specificity <- tn / (tn + fp)
+  return(specificity)
+}
+
+
+# Sensitivity
+sensitivity <- function(actuals, predictions) {
+  # Define the threshold for classification
+  threshold <- 0.5
+  # Convert the matrices to vectors
+  actuals_vec <- as.vector(actuals)
+  predictions_vec <- as.vector(predictions)
+  # Determine the true positives and false negatives
+  tp <- sum(actuals_vec >= threshold & predictions_vec >= threshold)
+  fn <- sum(actuals_vec >= threshold & predictions_vec < threshold)
+  # Calculate sensitivity
+  sensitivity <- tp / (tp + fn)
+  return(sensitivity)
+}
+
+
+# F1 Score
+f1_score <- function(actuals, predictions) {
+  # Define the threshold for classification
+  threshold <- 0.5
+  # Convert the matrices to vectors
+  actuals_vec <- as.vector(actuals)
+  predictions_vec <- as.vector(predictions)
+  # Determine the true positives, false positives, and false negatives
+  tp <- sum(actuals_vec >= threshold & predictions_vec >= threshold)
+  fp <- sum(actuals_vec < threshold & predictions_vec >= threshold)
+  fn <- sum(actuals_vec >= threshold & predictions_vec < threshold)
+  # Calculate precision and recall
+  precision <- tp / (tp + fp)
+  recall <- tp / (tp + fn)
+  # Calculate F1 score
+  f1_score <- 2 * precision * recall / (precision + recall)
+  return(f1_score)
+}
+
+
+# MCC (Matthews Correlation Coefficient)
+MCC <- function(actual, predicted) {
+  # Calculate the MCC for each row of the matrices
+  m <- nrow(actual)
+  mcc_vals <- numeric(m)
+  for (i in 1:m) {
+    a <- actual[i, ]
+    p <- predicted[i, ]
+    # Calculate the confusion matrix
+    tp <- sum(p >= a & p <= a[3])
+    tn <- sum(p <= a & p >= a[1])
+    fp <- sum(p > a[3])
+    fn <- sum(p < a[1])
+    # Calculate MCC
+    num <- tp * tn - fp * fn
+    denom <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    if (denom == 0) {
+      mcc_vals[i] <- 0
+    } else {
+      mcc_vals[i] <- num / denom
+    }
+  }
+  # Return the average MCC across all rows
+  mean(mcc_vals)
+}
+#------------------------------------------------------------------------#
+
+
+                              
+                         ###################################
+                         #### Case II: Crisp Predictors ####
+                         ####          Fuzzy Coefficients ##
+                         ####          Fuzzy Output     ####
+                         ###################################
+
+
+# Function to estimate Y
+Estimate_Y_cs2_logit <- function(X, b.lwr, b.upr, b0.lwr, b0.upr){
+  Np <- ncol(X)
+  Nr <- nrow(X)
+  b0 <- random_TFNs(b0.lwr, b0.upr) 
+  b <- matrix(NA, nrow = Np, ncol = 3)
+  for (i in 1:Np) {
+    b[i,] <- random_TFNs(b.lwr, b.upr) 
+  }
+  predy <- matrix(NA, nrow = Nr, ncol = 3)
+  for (i in 1:Nr) {  
+    bx <- b0 
+    for(j in 1:Np) {
+      bx <- add_TFN( bx , mult_TFN(b[j,],c(X[i,j], X[i,j] , X[i,j] )) )
+    }
+    predy[i,] <- div_TFN(c(1,1,1), (1 + exp(mult_TFN(c(-1,-1,-1),bx)))) # 1 /(1+exp(-X*b))
+  }
+  return(list("predictions" = predy, "b0" = b0, "bi" = b))
+}
+
+# Function to run estimate_Y many times
+Optimize_Y_gen_cs2 <- function(m, X, b.lwr, b.upr, b0.lwr, b0.upr){
+  results <- list()
+  for (i in 1:m) {
+    results[[i]] <- Estimate_Y_cs2_logit(X, b.lwr, b.upr, b0.lwr, b0.upr)
+  }
+  # store all predictions
+  store_predY <- list()
+  for (i in 1:m) {
+    store_predY[[i]] <- results[[i]]$predictions
+  }
+  # store all beta 0
+  store_b0 <- matrix(NA, nrow = m, ncol = 3)
+  for (i in 1:m) {
+    store_b0[i,] <- results[[i]]$b0
+  }
+  # store all beta i
+  store_bi <- list()
+  for (i in 1:m) {
+    store_bi[[i]] <- results[[i]]$bi
+  }
+  output_list <- list(store_predY, store_b0, store_bi)
+}
+
+
+# Function to find error
+Error_cs_gen_cs2 <- function(Experiment, Y, saveResults = TRUE){
+  store_predY <- Experiment
+  t <- length(store_predY)
+  MSE_list <- list() 
+  MAE_list <- list()
+  RMSE_list <- list()
+  for (i in 1:t) {
+    MSE_list[[i]] <- MSE_calc(Y,store_predY[[i]])
+    MAE_list[[i]] <- MAE_calc(Y,store_predY[[i]])
+    RMSE_list[[i]] <- RMSE(Y,store_predY[[i]])
+  }
+  mtx_seq <- seq(1:Iterations) 
+  error_results <- do.call(rbind, Map(data.frame, Matrix=mtx_seq, MSE=MSE_list, MAE=MAE_list ,RMSE=RMSE_list))
+  if (saveResults){
+    write.csv(error_results, "error_results.csv")
+  }
+  return(error_results)
+}
+#----------------------------------------------------------------------------------------#
+
+
+
+                        ####################################
+                        #### Case III: Fuzzy Predictors ####
+                        ####          Crisp Coefficients  ##
+                        ####          Fuzzy Output      ####
+                        ####################################
+
+
+# Function to estimate Y
+Estimate_Y_cs3_logit <- function(X, b.lwr, b.upr, b0.lwr, b0.upr){
+  Np <- length(X)
+  b0 <- random_crisps(1, b0.lwr, b0.upr) 
+  b <- vector()
+  for (i in 1:Np) {
+    b[i] <- random_crisps(1, b.lwr, b.upr) 
+  }
+  n <- nrow(X[[1]]) 
+  bx <- 0
+  for(j in 1:Np) {
+    bx <- bx + b[j]*Xlist[[j]] 
+  }
+  predy <- matrix(nrow = n, ncol = ncol(bx))
+  for (i in 1:n) {
+    predy[i,] <- 1 / (1 + exp(-bx[i,]))
+    predy[i,] <- sort(predy[i,])
+  }
+  return(list("predictions" = predy, "b0" = b0, "bi" = b))
+}
+
+
+# Function to run estimate_Y many times
+Optimize_Y_gen_cs3 <- function(m, X, b.lwr, b.upr, b0.lwr, b0.upr){
+  results <- list()
+  for (i in 1:m) {
+    results[[i]] <- Estimate_Y_cs3_logit(X, b.lwr, b.upr, b0.lwr, b0.upr)
+  }
+  # store all predictions
+  store_predY <- list()
+  for (i in 1:m) {
+    store_predY[[i]] <- results[[i]]$predictions
+  }
+  # store all beta 0
+  store_b0 <- matrix(NA, nrow = m, ncol = 3)
+  for (i in 1:m) {
+    store_b0[i,] <- results[[i]]$b0
+  }
+  # store all beta i
+  store_bi <- list()
+  for (i in 1:m) {
+    store_bi[[i]] <- results[[i]]$bi
+  }
+  output_list <- list(store_predY, store_b0, store_bi)
+}
+
+
+# Function to find error
+Error_cs_gen_cs3 <- function(Experiment, Y, saveResults = TRUE){
+  store_predY <- Experiment
+  t <- length(store_predY)
+  MSE_list <- list() 
+  MAE_list <- list()
+  RMSE_list <- list()
+  for (i in 1:t) {
+    MSE_list[[i]] <- MSE_calc(Y,store_predY[[i]])
+    MAE_list[[i]] <- MAE_calc(Y,store_predY[[i]])
+    RMSE_list[[i]] <- RMSE(Y,store_predY[[i]])
+  }
+  mtx_seq <- seq(1:Iterations) 
+  error_results <- do.call(rbind, Map(data.frame, Matrix=mtx_seq, MSE=MSE_list, MAE=MAE_list ,RMSE=RMSE_list))
+  if (saveResults){
+    write.csv(error_results, "error_results.csv")
+  }
+  return(error_results)
+}
+#----------------------------------------------------------------------------------------#
+
+
+                          
+                          ###################################
+                          #### Case IV: Fuzzy Predictors  ###
+                          ####          Fuzzy Coefficients ##
+                          ####          Fuzzy Output      ###
+                          ###################################
+
+
+# Function to estimate Y
+Estimate_Y_cs4 <- function(X, b.lwr, b.upr, b0.lwr, b0.upr){
+  p <- length(X) 
+  n <- nrow(X[[1]]) 
+  b <- matrix(NA, nrow = p, ncol = 3)
+  for (i in 1:p) {
+    b[i,] <- random_TFNs(b.lwr, b.upr)  
+  }
+  b0 <- random_TFNs(b0.lwr, b0.upr)
+  bixi <- matrix(NA, nrow = n, ncol = 3)
+  Predy <- matrix(NA, nrow = n, ncol = 3)
+  for ( i in 1:p){
+    for ( j in 1:n){
+      bixi[j,] <- mult_TFN(b[i,] , X[[i]][j,])
+      Predy[j,] <- add_TFN(b0, bixi[j,])
+      Predy[j,] <- div_TFN(c(1,1,1), (1 + exp(mult_TFN(c(-1,-1,-1),Predy[j,])))) # 1 /(1+exp(-X*b)
+      Predy[j,] <- sort(Predy[j,])
+    }
+  }
+  return(list("predictions" = Predy, "b0" = b0, "bi" = b))
+}
+
+
+# Function to run estimate_Y many times
+Optimize_Y_gen_cs4 <- function(m, X, b.lwr, b.upr, b0.lwr, b0.upr){
+  results <- list()
+  for (i in 1:m) {
+    results[[i]] <- Estimate_Y_cs4(X, b.lwr, b.upr, b0.lwr, b0.upr)
+  }
+  # store all predictions
+  store_predY <- list()
+  for (i in 1:m) {
+    store_predY[[i]] <- results[[i]]$predictions
+  }
+  # store all beta 0
+  store_b0 <- matrix(NA, nrow = m, ncol = 3)
+  for (i in 1:m) {
+    store_b0[i,] <- results[[i]]$b0
+  }
+  # store all beta i
+  store_bi <- list()
+  for (i in 1:m) {
+    store_bi[[i]] <- results[[i]]$bi
+  }
+  output_list <- list(store_predY, store_b0, store_bi)
+}
+
+
+# Function to find error
+Error_cs_gen_cs4 <- function(Experiment, Y, saveResults = TRUE){
+  store_predY <- Experiment
+  t <- length(store_predY)
+  MSE_list <- list() 
+  MAE_list <- list()
+  RMSE_list <- list()
+  for (i in 1:t) {
+    MSE_list[[i]] <- MSE_calc(Y,store_predY[[i]])
+    MAE_list[[i]] <- MAE_calc(Y,store_predY[[i]])
+    RMSE_list[[i]] <- RMSE(Y,store_predY[[i]])
+  }
+  mtx_seq <- seq(1:Iterations) 
+  error_results <- do.call(rbind, Map(data.frame, Matrix=mtx_seq, MSE=MSE_list, MAE=MAE_list ,RMSE=RMSE_list))
+  if (saveResults){
+    write.csv(error_results, "error_results.csv")
+  }
+  return(error_results)
+}
+#----------------------------------------------------------------------------------------#
+#----------------------------------------------------------------------------------------#
+
+
+
+#### Implement Case II ####
+#----------------------------------------------------------------------------------------#
+
+# Set predictors (change to the predictors of your study)
+Xmtx <- Df[, !(names(Df) %in% response_var)]
+
+# Set response variable (change to response variable of your study)
+Y <- Df[[response_var]]
+
+# Fuzzify the response variable
+TFN_Y <- fuzzify_Y(Y, Fuzzification.factor, l=left.point.asymmetry, r=right.point.asymmetry)
+
+# Run model and extract predictions
+MCI <- Optimize_Y_gen_cs2(Iterations, Xmtx, bi.lower, bi.upper, b0.lower, b0.upper)
+Predictions_MCI <- MCI[[1]] 
+
+# Classification of fuzzy subjects
+TFN_threshold_a <- Fuzzy.threshold[1]
+TFN_threshold_b <- Fuzzy.threshold[2]
+TFN_threshold_c <- Fuzzy.threshold[3]
+
+# Compare each vertex position for each predicted p against 0.5 and replace with 0s or 1s.
+TFNthreshold <- TriangularFuzzyNumber(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c) 
+ARRAYthreshold <- c(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c)
+
+for (i in 1:length(Predictions_MCI)) {
+  mat <- Predictions_MCI[[i]]
+  for (j in 1:nrow(mat)){
+    TFNprob <- TriangularFuzzyNumber(mat[j,1], mat[j,2], mat[j,3])
+    diffTFN <- sub_TFN(mat[j,], ARRAYthreshold )
+    diffTFN <-  TriangularFuzzyNumber(diffTFN[1],diffTFN[2],diffTFN[3])
+    # Use the expected value of TFN predicted probability to decide on the vertex being 0 or 1
+    if (expectedValue(TFNprob) < 0.5){ # Dubois D., Prade H. (1987), The mean value of a fuzzy number, Fuzzy Sets and Systems 24, pp. 279-300.
+      b_thresholded <- 0
+    } else {
+      b_thresholded <- 1
+    }
+    # Use the width of the difference between the TFN threshold and TFN predicted probability to add uncertainty around 0 or 1.
+    a_new <- b_thresholded - width(diffTFN)
+    c_new <- b_thresholded + width(diffTFN)
+    mat[j, 2] <- b_thresholded
+    mat[j, 1] <- a_new
+    mat[j, 3] <- c_new
+  }
+  Predictions_MCI[[i]] <- mat
+}
+
+# Error Optimization
+errors <- Error_cs_gen_cs2(Predictions_MCI, TFN_Y)
+bestRun <- as.array(colMins(as.matrix(errors[,-c(1)])))
+names(bestRun) <- colnames(errors[,-c(1)])
+errorEst <- round(apply(errors, 2, min), 3)
+errorEst <- errorEst[2:4]
+
+# Initialize empty vectors to store the performance metrics for each run
+nBestRun <- length(bestRun) 
+specificity_scores <- vector("numeric", nBestRun)
+sensitivity_scores <- vector("numeric", nBestRun)
+f1_scores <- vector("numeric", nBestRun)
+MCC_scores <- vector("numeric", nBestRun)
+
+# Loop over each element in bestRun and calculate the performance metrics
+for (i in 1:nBestRun) {
+  mat <- Predictions_MCI[[bestRun[i]]]
+  specificity_scores[i] <- specificity(TFN_Y, mat)
+  sensitivity_scores[i] <- sensitivity(TFN_Y, mat)
+  f1_scores[i] <- f1_score(TFN_Y, mat)
+  MCC_scores[i] <- MCC(TFN_Y, mat)
+}        
+
+# Flatten the lists into vectors
+specificity_scores <- unlist(specificity_scores)
+sensitivity_scores <- unlist(sensitivity_scores)
+f1_scores <- unlist(f1_scores)
+MCC_scores <- unlist(MCC_scores)
+
+Model_accuracy_stats <- data.frame(
+  bestRun,
+  errorEst,
+  specificity_scores,
+  sensitivity_scores,
+  f1_scores,
+  MCC_scores
+)
+
+# Store predicted beta values
+b0_list <- list()
+bi_list <- list()
+names <- c("MSE", "MAE", "RMSE")
+for (i in seq_along(bestRun)) {
+  mtx <- bestRun[[i]]
+  b0 <- MCI[[2]][mtx,]
+  bi <- MCI[[3]][[mtx]]
+  b0_list[[names[i]]] <- b0
+  bi_list[[names[i]]] <- bi
+}
+Model_predicted_beta0s <- do.call(rbind, b0_list)
+rownames(Model_predicted_beta0s) <- c("b0:MSE", "b0:MAE", "b0:RMSE")
+Model_predicted_betais <- do.call(rbind, bi_list)
+num_predictors <- ncol(Xmtx)
+row_names <- character(3 * num_predictors)  
+for (i in 1:num_predictors) {
+  index <- 3 * (i - 1) + 1  
+  row_names[index:(index + 2)] <- c(paste0("b", i, ":MSE"), paste0("b", i, ":MAE"), paste0("b", i, ":RMSE"))
+}
+rownames(Model_predicted_betais) <- row_names
+
+predicted_betas <- rbind(Model_predicted_beta0s,Model_predicted_betais)
+colnames(predicted_betas) <- c("TFN a", "TFN b", "TFN c")
+
+write.csv(Model_accuracy_stats, "Case.II_Model_accuracy_stats.csv")
+write.csv(predicted_betas, "Case.II_predicted_betas.csv")
+#----------------------------------------------------------------------------------------#
+
+
+
+#### Implement Case III ####
+#----------------------------------------------------------------------------------------#
+
+# Fuzzify predictors and store in a list
+Xlist <- list()
+predictor_names <- setdiff(names(Df), "Result_of_Treatment")
+for (predictor in predictor_names) {
+  fuzzy_var <- fuzzify_triangular(Df[[predictor]], w = fuzzy.factor.pred * mean(Df[[predictor]]))
+  Xlist[[paste0("f.", predictor)]] <- fuzzy_var
+}
+
+# Set response variable (change to response variable of your study)
+Y <- Df[[response_var]]
+
+# Fuzzify the response variable
+TFN_Y <- fuzzify_Y(Y, Fuzzification.factor, l=left.point.asymmetry, r=right.point.asymmetry)
+
+# MC-I 
+MCI.cs3 <- Optimize_Y_gen_cs3(Iterations, Xlist, bi.lower, bi.upper, b0.lower, b0.upper)
+Predictions_MCI.cs3 <- MCI.cs3[[1]] 
+
+# Compare each vertex position for each predicted p against 0.5 and replace with 0s or 1s.
+TFNthreshold <- TriangularFuzzyNumber(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c) 
+ARRAYthreshold <- c(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c)
+
+for (i in 1:length(Predictions_MCI.cs3)) {
+  mat <- Predictions_MCI.cs3[[i]]
+  for (j in 1:nrow(mat)){
+    TFNprob <- TriangularFuzzyNumber(mat[j,1], mat[j,2], mat[j,3])
+    diffTFN <- sub_TFN(mat[j,], ARRAYthreshold )
+    diffTFN <-  TriangularFuzzyNumber(diffTFN[1],diffTFN[2],diffTFN[3])
+    # Use the expected value of TFN predicted probability to decide on the vertex being 0 or 1
+    if (expectedValue(TFNprob) < 0.5){ # Dubois D., Prade H. (1987), The mean value of a fuzzy number, Fuzzy Sets and Systems 24, pp. 279-300.
+      b_thresholded <- 0
+    } else {
+      b_thresholded <- 1
+    }
+    # Use the width of the difference between the TFN threshold and TFN predicted probability to add uncertainty around 0 or 1.
+    a_new <- b_thresholded - width(diffTFN)
+    c_new <- b_thresholded + width(diffTFN)
+    # shiftedTFN <- TriangularFuzzyNumber(a_new, b_thresholded, c_new)
+    mat[j, 2] <- b_thresholded
+    mat[j, 1] <- a_new
+    mat[j, 3] <- c_new
+  }
+  Predictions_MCI.cs3[[i]] <- mat
+}
+
+# Error Optimization
+errors <- Error_cs_gen_cs3(Predictions_MCI.cs3, TFN_Y)
+bestRun <- as.array(colMins(as.matrix(errors[,-c(1)])))
+names(bestRun) <- colnames(errors[,-c(1)])
+errorEst <- round(apply(errors, 2, min), 3)
+errorEst <- errorEst[2:4]
+
+# Initialize empty vectors to store the performance metrics for each run
+nBestRun <- length(bestRun) 
+specificity_scores <- vector("numeric", nBestRun)
+sensitivity_scores <- vector("numeric", nBestRun)
+f1_scores <- vector("numeric", nBestRun)
+MCC_scores <- vector("numeric", nBestRun)
+
+# Loop over each element in bestRun and calculate the performance metrics
+for (i in 1:nBestRun) {
+  mat <- Predictions_MCI.cs3[[bestRun[i]]]
+  specificity_scores[i] <- specificity(TFN_Y, mat)
+  sensitivity_scores[i] <- sensitivity(TFN_Y, mat)
+  f1_scores[i] <- f1_score(TFN_Y, mat)
+  MCC_scores[i] <- MCC(TFN_Y, mat)
+}                  
+
+# Flatten the lists into vectors
+specificity_scores <- unlist(specificity_scores)
+sensitivity_scores <- unlist(sensitivity_scores)
+f1_scores <- unlist(f1_scores)
+MCC_scores <- unlist(MCC_scores)
+
+Model_accuracy_stats <- data.frame(
+  bestRun,
+  errorEst,
+  specificity_scores,
+  sensitivity_scores,
+  f1_scores,
+  MCC_scores
+  )
+
+# Store predicted beta values
+b0_list <- list()
+bi_list <- list()
+names <- c("MSE", "MAE", "RMSE")
+for (i in seq_along(bestRun)) {
+  mtx <- bestRun[[i]]
+  b0 <- MCI.cs3[[2]][mtx,]
+  bi <- MCI.cs3[[3]][[mtx]]
+  b0_list[[names[i]]] <- b0
+  bi_list[[names[i]]] <- bi
+}
+
+# Extract coefficients
+num_predictors <- length(bi_list$MSE)
+predicted_betas <- matrix(NA, nrow = 3, ncol = num_predictors + 1)
+predicted_betas[, 1] <- c(b0_list$MSE[1], b0_list$MAE[1], b0_list$RMSE[1])
+for (i in 1:num_predictors) {
+  bMSE <- bi_list$MSE[i]
+  bMAE <- bi_list$MAE[i]
+  bRMSE <- bi_list$RMSE[i]
+  predicted_betas[, i + 1] <- c(bMSE, bMAE, bRMSE)
+}
+
+rownames(predicted_betas) <- c("MSE", "MAE", "RMSE")
+
+write.csv(Model_accuracy_stats, "Case.III_Model_accuracy_stats.csv")
+write.csv(predicted_betas, "Case.III_predicted_betas.csv")
+#----------------------------------------------------------------------------------------#
+
+
+
+
+#### Implement Case IV ####
+#----------------------------------------------------------------------------------------#
+
+# Fuzzify predictors and store in a list
+Xlist <- list()
+predictor_names <- setdiff(names(Df), "Result_of_Treatment")
+for (predictor in predictor_names) {
+  fuzzy_var <- fuzzify_triangular(Df[[predictor]], w = fuzzy.factor.pred * mean(Df[[predictor]]))
+  Xlist[[paste0("f.", predictor)]] <- fuzzy_var
+}
+
+# Set response variable (change to response variable of your study)
+Y <- Df[[response_var]]
+
+# Fuzzify the response variable
+TFN_Y <- fuzzify_Y(Y, Fuzzification.factor, l=left.point.asymmetry, r=right.point.asymmetry)
+
+# MC-I 
+MCI.cs4 <- Optimize_Y_gen_cs4(Iterations, Xlist, bi.lower, bi.upper, b0.lower, b0.upper)
+Predictions_MCI.cs4 <- MCI.cs4[[1]] 
+
+# Compare each vertex position for each predicted p against 0.5 and replace with 0s or 1s.
+TFNthreshold <- TriangularFuzzyNumber(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c) 
+ARRAYthreshold <- c(TFN_threshold_a, TFN_threshold_b, TFN_threshold_c)
+
+for (i in 1:length(Predictions_MCI.cs4)) {
+  mat <- Predictions_MCI.cs4[[i]]
+  for (j in 1:nrow(mat)){
+    TFNprob <- TriangularFuzzyNumber(mat[j,1], mat[j,2], mat[j,3])
+    diffTFN <- sub_TFN(mat[j,], ARRAYthreshold )
+    diffTFN <-  TriangularFuzzyNumber(diffTFN[1],diffTFN[2],diffTFN[3])
+    # Use the expected value of TFN predicted probability to decide on the vertex being 0 or 1
+    if (expectedValue(TFNprob) < 0.5){ # Dubois D., Prade H. (1987), The mean value of a fuzzy number, Fuzzy Sets and Systems 24, pp. 279-300.
+      b_thresholded <- 0
+    } else {
+      b_thresholded <- 1
+    }
+    # Use the width of the difference between the TFN threshold and TFN predicted probability to add uncertainty around 0 or 1.
+    a_new <- b_thresholded - width(diffTFN)
+    c_new <- b_thresholded + width(diffTFN)
+    # shiftedTFN <- TriangularFuzzyNumber(a_new, b_thresholded, c_new)
+    mat[j, 2] <- b_thresholded
+    mat[j, 1] <- a_new
+    mat[j, 3] <- c_new
+  }
+  Predictions_MCI.cs4[[i]] <- mat
+}
+
+# Error Optimization
+errors <- Error_cs_gen_cs4(Predictions_MCI.cs4, TFN_Y)
+bestRun <- as.array(colMins(as.matrix(errors[,-c(1)])))
+names(bestRun) <- colnames(errors[,-c(1)])
+errorEst <- round(apply(errors, 2, min), 3)
+errorEst <- errorEst[2:4]
+
+# Initialize empty vectors to store the performance metrics for each run
+nBestRun <- length(bestRun) 
+specificity_scores <- vector("numeric", nBestRun)
+sensitivity_scores <- vector("numeric", nBestRun)
+f1_scores <- vector("numeric", nBestRun)
+MCC_scores <- vector("numeric", nBestRun)
+
+# Loop over each element in bestRun and calculate the performance metrics
+for (i in 1:nBestRun) {
+  mat <- Predictions_MCI.cs4[[bestRun[i]]]
+  specificity_scores[i] <- specificity(TFN_Y, mat)
+  sensitivity_scores[i] <- sensitivity(TFN_Y, mat)
+  f1_scores[i] <- f1_score(TFN_Y, mat)
+  MCC_scores[i] <- MCC(TFN_Y, mat)
+}                  
+
+# Flatten the lists into vectors
+specificity_scores <- unlist(specificity_scores)
+sensitivity_scores <- unlist(sensitivity_scores)
+f1_scores <- unlist(f1_scores)
+MCC_scores <- unlist(MCC_scores)
+
+Model_accuracy_stats <- data.frame(
+  bestRun,
+  errorEst,
+  specificity_scores,
+  sensitivity_scores,
+  f1_scores,
+  MCC_scores
+)
+
+# Store predicted beta values
+b0_list <- list()
+bi_list <- list()
+names <- c("MSE", "MAE", "RMSE")
+for (i in seq_along(bestRun)) {
+  mtx <- bestRun[[i]]
+  b0 <- MCI.cs4[[2]][mtx,]
+  bi <- MCI.cs4[[3]][[mtx]]
+  b0_list[[names[i]]] <- b0
+  bi_list[[names[i]]] <- bi
+}
+
+# Extract coefficients
+b0_list <- list()
+bi_list <- list()
+names <- c("MSE", "MAE", "RMSE")
+for (i in seq_along(bestRun)) {
+  mtx <- bestRun[[i]]
+  b0 <- MCI.cs4[[2]][mtx,]
+  bi <- MCI.cs4[[3]][[mtx]]
+  b0_list[[names[i]]] <- b0
+  bi_list[[names[i]]] <- bi
+}
+
+Model_predicted_beta0s <- do.call(rbind, b0_list)
+rownames(Model_predicted_beta0s) <- c("b0:MSE", "b0:MAE", "b0:RMSE")
+Model_predicted_betais <- do.call(rbind, bi_list)
+num_predictors <- ncol(Xmtx)
+row_names <- character(3 * num_predictors)  
+for (i in 1:num_predictors) {
+  index <- 3 * (i - 1) + 1  
+  row_names[index:(index + 2)] <- c(paste0("b", i, ":MSE"), paste0("b", i, ":MAE"), paste0("b", i, ":RMSE"))
+}
+rownames(Model_predicted_betais) <- row_names
+
+predicted_betas <- rbind(Model_predicted_beta0s,Model_predicted_betais)
+colnames(predicted_betas) <- c("TFN a", "TFN b", "TFN c")
+
+write.csv(Model_accuracy_stats, "Case.IV_Model_accuracy_stats.csv")
+write.csv(predicted_betas, "Case.IV_predicted_betas.csv")
+
+
+
