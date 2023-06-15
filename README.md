@@ -14,7 +14,3 @@ Link to article:
 * Three optimization and four performance measures are used to optimize coefficient estimates and evaluate classification accuracy.
 * The fuzzy logistic regression framework outperforms traditional crisp machine learning models in various scenarios, effectively addressing separation and imbalance issues.
 
-Our recommendation is:
-* For imbalanced data, use Case II or Case III.
-* If your data has singificant separation present, use Case IV.
-* If there are no separation or imbalance issues, Cases II and III perform best.
