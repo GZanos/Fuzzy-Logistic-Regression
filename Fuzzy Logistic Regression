@@ -676,7 +676,7 @@ write.csv(predicted_betas, "Case.II_predicted_betas.csv")
 
 # Fuzzify predictors and store in a list
 Xlist <- list()
-predictor_names <- setdiff(names(Df), "Result_of_Treatment")
+predictor_names <- setdiff(names(Df), response_var)
 for (predictor in predictor_names) {
   fuzzy_var <- fuzzify_triangular(Df[[predictor]], w = fuzzy.factor.pred * mean(Df[[predictor]]))
   Xlist[[paste0("f.", predictor)]] <- fuzzy_var
